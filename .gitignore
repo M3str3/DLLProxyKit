@@ -1,0 +1,7 @@
+out/
+dlls-output/
+target/
+*.pdb
+*.tmp
+__pycache__/
+*.pyc
