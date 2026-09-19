@@ -228,6 +228,20 @@ class Result(NamedTuple):
 #  CLI
 # ---------------------------------------------------------------------
 
+def _sanitise_pkg_name(base: str) -> str:
+    """Cargo package names must be valid Rust identifiers.
+    Keep ASCII alphanumerics, dash and underscore; replace the rest."""
+    out = []
+    for ch in base:
+        if ch.isascii() and (ch.isalnum() or ch in "-_"):
+            out.append(ch)
+        else:
+            out.append("_")
+    name = "proxy_" + "".join(out)
+    # Cargo also disallows a leading digit after the prefix is stripped,
+    # but our "proxy_" prefix guarantees it starts with a letter.
+    return name
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate Rust-based DLL proxies that forward exports "
@@ -348,8 +362,10 @@ def prepare_project(workdir: Path, dll_name: str, lib_rs: str) -> Path:
         shutil.rmtree(proj)
     (proj / "src").mkdir(parents=True)
 
+    pkg_name = _sanitise_pkg_name(base) 
+
     (proj / "Cargo.toml").write_text(
-        CARGO_TOML_TEMPLATE.format(pkg_name=f"proxy_{base}"),
+        CARGO_TOML_TEMPLATE.format(pkg_name=f"proxy_{pkg_name}"),
         encoding="utf-8",
     )
     (proj / "src" / "lib.rs").write_text(lib_rs, encoding="utf-8")
