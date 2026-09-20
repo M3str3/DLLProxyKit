@@ -19,30 +19,25 @@ Generates a drop-in DLL replacement that forwards every named export to
 `C:\Windows\Temp\payload.txt`). Architecture-matched (x86 / x64 / ARM64).
 
 ---
-
-## Setup
-
-```cmd
-python -m pip install -e ".[dev]"
-```
-
-Need a compiler on PATH: `cl`, MinGW `gcc`, `tcc`, or `rustc` (+ rustup targets).
-
-## Build the exe
-
-```cmd
-build.cmd
-```
-
-Output: `dist\DLLProxyKit.exe` (templates C/Rust go inside the exe).
+<div align="center">
+<img width="600" height="607" alt="image" src="https://github.com/user-attachments/assets/8a2f5b12-f882-42b3-b6ac-901fdb2cf0b1" />
+</div>
 
 ## Usage
 
-```cmd
-python -m dllproxykit <input> [output] [--payload CMD] [--skip LIST] [--keep-going]
+### Build a binary
+```
+./build.cmd
+```
+### Automatic exploit Path Hijacking for DLL,Exe & scripting langs
+```
+./dist/DLLProxyKit --auto
+```
 
-:: Example
-python -m dllproxykit tests\dlls-test tests\dlls-output --keep-going
+### DLL proxy a specific folder
+```cmd
+proxykit <input> <?output?> [options]
+python ./src/dllproxykit tests\dlls-test tests\dlls-output --keep-going
 ```
 Output:
 ```text
@@ -56,11 +51,9 @@ dll-output/
   └── appverifUI.original.dll ← original
 ```
 Payload is written to `C:\Windows\Temp\payload.txt` (not overwritten if it
-already exists). A `payload.txt` next to the proxy wins if present. Default payload:
-```
-whoami >> C:\Windows\Temp\pwned.txt.
-```
-You can change the payload.txt every time you want, without recompile everything
+already exists). A `payload.txt` next to the proxy wins if present. Default payload in `src/DLLProxyKit/core/common.py`.
+
+You can change the payload.txt every time you want, without recompile everything.
 
 ## Notes
 One C stub per export; lazily forwards to the original via LoadLibraryW + GetProcAddress.
