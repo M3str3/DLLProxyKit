@@ -7,7 +7,7 @@
 
 **DLL proxies that forward every export but they allow a payload to be executed.**
 
-[![Rust](https://img.shields.io/badge/rust-1.74+-orange?logo=rust)](https://www.rust-lang.org/)
+[![C](https://img.shields.io/badge/C-MSVC%20%7C%20MinGW%20%7C%20tcc-blue)](#)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](#)
 
 </div>
@@ -15,24 +15,34 @@
 ---
 
 Generates a drop-in DLL replacement that forwards every named export to
-`<name>_orig.dll` and runs `payload.txt` on load. Architecture-matched
-(x86 / x64 / ARM64).
+`<name>.original.dll` and runs `payload.txt` on load (local file first, else
+`C:\Windows\Temp\payload.txt`). Architecture-matched (x86 / x64 / ARM64).
 
 ---
 
-## Attacker Setup
+## Setup
 
 ```cmd
-pip install pefile                         :: To run the DLL generator
-rustup target add i686-pc-windows-msvc     :: To compile x86 DLLs
+python -m pip install -e ".[dev]"
 ```
 
-## Usage
-```cmd
-python src\dllproxymaker.py <input_dir> <output_dir> [--payload CMD] [--skip LIST] [--keep-going]
+Need a compiler on PATH: `cl`, MinGW `gcc`, `tcc`, or `rustc` (+ rustup targets).
 
-# Example
-python src\dllproxymaker.py tests\dll-test tests\dll-output --payload "whoami > C:\Windows\Temp\pwned.txt" --keep-going
+## Build the exe
+
+```cmd
+build.cmd
+```
+
+Output: `dist\DLLProxyKit.exe` (templates C/Rust go inside the exe).
+
+## Usage
+
+```cmd
+python -m dllproxykit <input> [output] [--payload CMD] [--skip LIST] [--keep-going]
+
+:: Example
+python -m dllproxykit tests\dlls-test tests\dlls-output --keep-going
 ```
 Output:
 ```text
@@ -41,19 +51,19 @@ dll-test/
   └── appverifUI.dll          
 dll-output/
   ├── vfcompat.dll            ← proxy
-  ├── vfcompat_orig.dll       ← original
+  ├── vfcompat.original.dll   ← original
   ├── appverifUI.dll          ← proxy
-  ├── appverifUI_orig.dll     ← original
-  └── payload.txt             ← runs on every DLL load
+  └── appverifUI.original.dll ← original
 ```
-Deploy by copying *.dll and payload.txt together. Default payload:
+Payload is written to `C:\Windows\Temp\payload.txt` (not overwritten if it
+already exists). A `payload.txt` next to the proxy wins if present. Default payload:
 ```
 whoami >> C:\Windows\Temp\pwned.txt.
 ```
 You can change the payload.txt every time you want, without recompile everything
 
 ## Notes
-One Rust stub per export; lazily forwards to the original via LoadLibraryW + GetProcAddress.
+One C stub per export; lazily forwards to the original via LoadLibraryW + GetProcAddress.
 
 Ordinal-only exports are not forwarded.
 Args assumed to be up to ten usize values (covers most Win32 APIs).

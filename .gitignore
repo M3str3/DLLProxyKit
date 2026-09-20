@@ -1,6 +1,11 @@
 out/
+output/
 dlls-output/
 target/
+build/
+dist/
+.venv/
+*.egg-info/
 *.pdb
 *.tmp
 __pycache__/
