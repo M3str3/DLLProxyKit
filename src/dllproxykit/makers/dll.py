@@ -80,8 +80,8 @@ def inspect_dll(path: Path) -> DllInfo:
     return DllInfo(path=path, name=path.name, exports=named, ordinal_only=ordinal_only, arch=arch)
 
 
-def should_skip(path: Path, skips: Iterable[str]) -> str | None:
-    return skip_proxy_target(path, skips)
+def should_skip(path: Path, skips: Iterable[str], out_dir: Path | None = None) -> str | None:
+    return skip_proxy_target(path, skips, out_dir)
 
 
 def process_one(
@@ -155,7 +155,7 @@ def run(
     failed: list[Result] = []
 
     for dll_path in dlls:
-        reason = should_skip(dll_path, skips)
+        reason = should_skip(dll_path, skips, out_dir)
         if reason is not None:
             skipped.append(Result(dll_path.name, reason))
             continue
@@ -165,6 +165,7 @@ def run(
         except Exception as exc:
             failed.append(Result(dll_path.name, str(exc)))
             console.fail(f"{dll_path.name}  {exc}")
+            console.debug_exc()
             if not keep_going:
                 console.warn("aborting  (use --keep-going)")
                 break

@@ -64,7 +64,18 @@ def ensure_fallback_payload(text: str) -> None:
     PAYLOAD_FALLBACK.write_text(body, encoding="utf-8")
 
 
-def skip_proxy_target(path: Path, skips: Iterable[str]) -> str | None:
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def skip_proxy_target(
+    path: Path,
+    skips: Iterable[str],
+    out_dir: Path | None = None,
+) -> str | None:
     lower = path.name.lower()
     if is_orig_sidecar(path):
         return "already a .original sidecar"
@@ -72,6 +83,10 @@ def skip_proxy_target(path: Path, skips: Iterable[str]) -> str | None:
         return SKIP_SELF
     if orig_sidecar(path).exists():
         return "already proxied"
+    if out_dir is not None and not _same_dir(path.parent, Path(out_dir)):
+        dest = Path(out_dir) / path.name
+        if dest.exists() or orig_sidecar(dest).exists():
+            return "already in output"
     for needle in skips:
         if needle and needle in lower:
             return f"matches skip pattern ({needle})"
@@ -121,7 +136,18 @@ def resolve_io(input_path: Path, output: str | None, ext: str):
         files = [input_path]
         default_dir = input_path.parent
     elif input_path.is_dir():
-        files = sorted(input_path.glob(f"*{ext}"))
+        files = []
+        try:
+            items = list(input_path.iterdir())
+        except OSError:
+            items = []
+        for item in items:
+            try:
+                if item.is_file() and item.suffix.lower() == ext:
+                    files.append(item)
+            except OSError:
+                continue
+        files.sort()
         default_dir = input_path
     else:
         raise FileNotFoundError(f"Input does not exist: {input_path}")
@@ -150,5 +176,10 @@ def print_summary(
 ) -> None:
     from ..ui import console
 
-    for item in skipped:
-        console.warn(f"{item.name}  skip  {console.dim(item.reason)}")
+    if not skipped:
+        return
+    if console.is_verbose():
+        for item in skipped:
+            console.warn(f"{item.name}  skip  {console.dim(item.reason)}")
+        return
+    console.info(f"{len(skipped)} skipped  (-v)")

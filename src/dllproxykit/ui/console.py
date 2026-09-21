@@ -4,6 +4,7 @@ import ctypes
 import sys
 
 _USE = False
+_VERBOSE = False
 
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -17,8 +18,9 @@ _YELL = "\033[30;43m"
 _UNDER = "\033[4m"
 
 
-def setup() -> None:
-    global _USE
+def setup(*, verbose: bool = False) -> None:
+    global _USE, _VERBOSE
+    _VERBOSE = verbose
     if hasattr(sys.stdout, "reconfigure"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -90,3 +92,22 @@ def info(msg: str, indent: int = 2) -> None:
 
 def item(msg: str, indent: int = 4) -> None:
     print(f"{' ' * indent}{msg}")
+
+
+def is_verbose() -> bool:
+    return _VERBOSE
+
+
+def debug(msg: str, indent: int = 2) -> None:
+    if not _VERBOSE:
+        return
+    print(f"{' ' * indent}{dim('…')}  {msg}")
+
+
+def debug_exc() -> None:
+    if not _VERBOSE:
+        return
+    import traceback
+
+    for line in traceback.format_exc().splitlines():
+        debug(line)

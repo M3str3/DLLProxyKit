@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 import subprocess
@@ -60,14 +61,39 @@ def _which(name: str) -> str | None:
     return shutil.which(name)
 
 
-def _nearby_tcc() -> list[str]:
-    roots = [Path(sys.executable).resolve().parent]
-    found: list[str] = []
-    for root in roots:
-        for cand in (root / "tcc.exe", root / "tcc" / "tcc.exe"):
-            if cand.is_file():
-                found.append(str(cand))
-    found.extend(_bundled_tcc())
+def _tcc_in_dir(root: Path) -> list[Path]:
+    out: list[Path] = []
+    try:
+        if not root.is_dir():
+            return out
+        for path in root.iterdir():
+            try:
+                if path.is_file() and _is_tcc_exe(path):
+                    out.append(path)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def _path_tcc() -> list[Path]:
+    found: list[Path] = []
+    for raw in os.environ.get("PATH", "").split(os.pathsep):
+        raw = raw.strip().strip('"')
+        if not raw:
+            continue
+        root = Path(raw)
+        found.extend(_tcc_in_dir(root))
+        found.extend(_tcc_in_dir(root / "tcc"))
+    return found
+
+
+def _nearby_tcc() -> list[Path]:
+    root = Path(sys.executable).resolve().parent
+    found = _tcc_in_dir(root)
+    found.extend(_tcc_in_dir(root / "tcc"))
+    found.extend(Path(p) for p in _bundled_tcc())
     return found
 
 
@@ -108,13 +134,28 @@ def _bundled_tcc() -> list[str]:
 
 def _tcc_target_arch(path: Path) -> str:
     name = path.name.lower()
-    if "i386" in name or name.startswith("i686"):
+    if "i386" in name or "i686" in name:
         return ARCH_X86
     if "aarch64" in name or "arm64" in name:
         return ARCH_ARM64
     if "x86_64" in name or "amd64" in name:
         return ARCH_X64
     return pe_arch(path) or ARCH_X64
+
+
+def _tcc_paths() -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in (*_path_tcc(), *_nearby_tcc()):
+        try:
+            key = os.path.normcase(str(path.resolve()))
+        except OSError:
+            key = os.path.normcase(str(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(str(path))
+    return out
 
 
 def _arch_from_dumpmachine(text: str) -> str | None:
@@ -209,12 +250,7 @@ def detect_compilers() -> list[Compiler]:
             if sibling.is_file():
                 add(_probe_gnu("gcc", str(sibling)))
 
-    tcc_paths = []
-    w = _which("tcc")
-    if w:
-        tcc_paths.append(w)
-    tcc_paths.extend(_nearby_tcc())
-    for path in tcc_paths:
+    for path in _tcc_paths():
         add(_probe_tcc(path))
 
     rustc = _which("rustc")
@@ -230,7 +266,7 @@ def _probe_by_path(path: str) -> list[Compiler]:
         return _probe_cl(path)
     if "rustc" in name:
         return _probe_rustc(path)
-    if name.startswith("tcc"):
+    if name.startswith("tcc") or _is_tcc_exe(Path(path)):
         return _probe_tcc(path)
     if "clang" in name:
         return _probe_gnu("clang", path)
@@ -272,13 +308,32 @@ def require_compiler(compilers: list[Compiler], arch: str) -> Compiler:
 
 
 def _check(result: subprocess.CompletedProcess[str], label: str) -> None:
-    if result.returncode != 0:
-        from .. import ui as console
-        console.fail(f"{label} failed")
-        text = (result.stdout or "") + (result.stderr or "")
-        for line in text.splitlines()[:20]:
+    if result.returncode == 0:
+        return
+    from .. import ui as console
+
+    text = (result.stdout or "") + (result.stderr or "")
+    lines = text.splitlines()
+    first = next((ln.strip() for ln in lines if ln.strip()), f"exit {result.returncode}")
+    console.fail(f"{label} failed  (exit {result.returncode})")
+    shown = lines if console.is_verbose() else lines[:30]
+    for line in shown:
+        if line.strip():
             console.item(console.dim(line))
-        raise RuntimeError(f"{label} failed")
+    hidden = len(lines) - len(shown)
+    if hidden > 0:
+        console.info(f"{hidden} more lines  (-v)")
+    raise RuntimeError(f"{label} failed  {first}")
+
+
+def _run_compile(cmd: list[str], cwd: Path, label: str) -> None:
+    from .. import ui as console
+
+    console.debug(" ".join(cmd))
+    result = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace"
+    )
+    _check(result, label)
 
 
 def compile_dll(
@@ -298,15 +353,7 @@ def compile_dll(
             "-C", "opt-level=z", "--target", compiler.extra_args[0],
             "-o", out_dll.name, src_c.name,
         ]
-        result = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace"
-        )
-        _check(result, "compile dll")
-        if not out_dll.exists():
-            raise RuntimeError(f"Compiled DLL not found: {out_dll}")
-        return out_dll
-
-    if compiler.kind == "cl":
+    elif compiler.kind == "cl":
         cmd = [
             compiler.path, "/nologo", "/O2", "/LD",
             src_c.name, f"/Fe:{out_dll.name}",
@@ -322,10 +369,7 @@ def compile_dll(
             cmd.append(def_name)
         cmd.append("-lkernel32")
 
-    result = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace"
-    )
-    _check(result, "compile dll")
+    _run_compile(cmd, cwd, "compile dll")
     if not out_dll.exists():
         raise RuntimeError(f"Compiled DLL not found: {out_dll}")
     return out_dll
@@ -342,15 +386,7 @@ def compile_exe(compiler: Compiler, src_c: Path, out_exe: Path) -> Path:
             "-C", "opt-level=z", "--target", compiler.extra_args[0],
             "-o", out_exe.name, src_c.name,
         ]
-        result = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace"
-        )
-        _check(result, "compile exe")
-        if not out_exe.exists():
-            raise RuntimeError(f"Compiled EXE not found: {out_exe}")
-        return out_exe
-
-    if compiler.kind == "cl":
+    elif compiler.kind == "cl":
         cmd = [
             compiler.path, "/nologo", "/O2",
             src_c.name, f"/Fe:{out_exe.name}",
@@ -361,10 +397,7 @@ def compile_exe(compiler: Compiler, src_c: Path, out_exe: Path) -> Path:
             "-O2", "-o", out_exe.name, src_c.name, "-lkernel32",
         ]
 
-    result = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace"
-    )
-    _check(result, "compile exe")
+    _run_compile(cmd, cwd, "compile exe")
     if not out_exe.exists():
         raise RuntimeError(f"Compiled EXE not found: {out_exe}")
     return out_exe

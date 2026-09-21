@@ -1,7 +1,24 @@
 from __future__ import annotations
 
 from . import art
-from .console import bold, dim, fail, green, hot, info, item, ok, section, setup, under, warn, yell
+from .console import (
+    bold,
+    debug,
+    debug_exc,
+    dim,
+    fail,
+    green,
+    hot,
+    info,
+    is_verbose,
+    item,
+    ok,
+    section,
+    setup,
+    under,
+    warn,
+    yell,
+)
 
 
 def _compose_rows(icon: str, text: str, gap: int = 4) -> tuple[int, list[tuple[str, str]]]:

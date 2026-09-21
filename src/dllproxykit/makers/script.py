@@ -31,10 +31,10 @@ def _is_ps1_cmd_sidecar(path: Path) -> bool:
         return False
 
 
-def should_skip(path: Path, skips: Iterable[str]) -> str | None:
+def should_skip(path: Path, skips: Iterable[str], out_dir: Path | None = None) -> str | None:
     if _is_ps1_cmd_sidecar(path):
         return "ps1 cmd launcher"
-    return skip_proxy_target(path, skips)
+    return skip_proxy_target(path, skips, out_dir)
 
 
 def remove_ps1_cmd_sidecar(ps1: Path) -> None:
@@ -194,7 +194,7 @@ def run(
     failed: list[Result] = []
 
     for path in files:
-        reason = should_skip(path, skips)
+        reason = should_skip(path, skips, out_dir)
         if reason is not None:
             skipped.append(Result(path.name, reason))
             continue
@@ -203,6 +203,7 @@ def run(
         except Exception as exc:
             failed.append(Result(path.name, str(exc)))
             console.fail(f"{path.name}  {exc}")
+            console.debug_exc()
             if not keep_going:
                 console.warn("aborting  (use --keep-going)")
                 break

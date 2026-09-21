@@ -13,14 +13,22 @@ from ..core.common import (
 from ..core.compiler import Compiler
 from .kinds import KINDS
 from .script import remove_ps1_cmd_sidecar
-from ..core.pathscan import auto_targets
+from ..core.pathscan import auto_targets, is_windows_dir, scan_path_dirs, shadow_plan
 
 
 def _iter_files(folder: Path) -> list[Path]:
     try:
-        return [p for p in folder.iterdir() if p.is_file()]
+        items = list(folder.iterdir())
     except OSError:
         return []
+    out: list[Path] = []
+    for path in items:
+        try:
+            if path.is_file():
+                out.append(path)
+        except OSError:
+            continue
+    return out
 
 
 def _files(folder: Path, ext: str) -> list[Path]:
@@ -119,13 +127,88 @@ def _revert_dirs(dirs: list[Path], kinds=KINDS) -> int:
     return rc
 
 
+def _proxy_into(
+    src: Path,
+    dest: Path,
+    payload: str,
+    skip: str | None,
+    compilers: list[Compiler] | None,
+    kinds,
+) -> int:
+    rc = 0
+    work = False
+    for kind in kinds:
+        files = [path for path in _files(src, kind.ext) if not is_orig_sidecar(path)]
+        if not files:
+            continue
+        work = True
+        console.info(f"{len(files)} {kind.ext[1:]}")
+        for path in files:
+            console.debug(str(path))
+        result = kind.proxy(
+            input=src,
+            output=dest,
+            payload=payload,
+            skip=skip,
+            keep_going=True,
+            compilers=compilers,
+        )
+        if result != 0:
+            rc = result
+    if not work:
+        console.info("empty  skip")
+    return rc
+
+
+def _run_auto_shadow(
+    payload: str,
+    skip: str | None,
+    compilers: list[Compiler] | None,
+    kinds,
+    aggressive: bool,
+) -> int:
+    plan = shadow_plan(aggressive=aggressive)
+    if plan is None:
+        console.warn("no ranked writable PATH dir outside the user profile")
+        return 0
+    dest, sources = plan
+    console.section(str(dest.path))
+    console.info(f"#{dest.rank}  shadow dest")
+    if console.is_verbose():
+        for item in scan_path_dirs():
+            if item.rank is None or dest.rank is None or item.rank <= dest.rank:
+                continue
+            if not item.exists:
+                why = "missing"
+            elif item.writable:
+                why = "writable"
+            elif not aggressive and is_windows_dir(item.path):
+                why = "windows"
+            else:
+                continue
+            console.debug(f"#{item.rank}  skip  {why}  {item.path}")
+    if not sources:
+        console.warn("no later unwritable PATH dirs")
+        return 0
+    rc = 0
+    for item in sources:
+        console.section(f"#{item.rank}  {item.path}")
+        rc = rc or _proxy_into(item.path, dest.path, payload, skip, compilers, kinds)
+    return rc
+
+
 def run_auto(
     payload: str,
     skip: str | None = None,
     compilers: list[Compiler] | None = None,
     kinds=KINDS,
+    shadow: bool = False,
+    aggressive: bool = False,
 ) -> int:
-    targets = auto_targets()
+    if shadow:
+        return _run_auto_shadow(payload, skip, compilers, kinds, aggressive)
+
+    targets = auto_targets(aggressive=aggressive)
     if not targets:
         console.warn("no writable PATH dirs outside the user profile")
         return 0
@@ -163,9 +246,9 @@ def _orig_for_file(path: Path) -> Path | None:
     return None
 
 
-def run_revert(target: str | Path | None = None, kinds=KINDS) -> int:
+def run_revert(target: str | Path | None = None, kinds=KINDS, aggressive: bool = False) -> int:
     if target is None:
-        dirs = [item.path for item in auto_targets()]
+        dirs = [item.path for item in auto_targets(aggressive=aggressive)]
         rc = 0
         if not dirs:
             console.warn("no writable PATH dirs outside the user profile")

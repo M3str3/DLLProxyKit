@@ -61,8 +61,15 @@ def _path_sources() -> list[tuple[str, str]]:
     return chunks
 
 
+def _safe_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def is_writable(directory: Path) -> bool:
-    if not directory.is_dir():
+    if not _safe_is_dir(directory):
         return False
     probe = directory / f".phjwrite_{os.getpid()}.tmp"
     try:
@@ -104,7 +111,7 @@ def scan_path_dirs() -> list[PathDir]:
     result: list[PathDir] = []
     for path in order:
         key = os.path.normcase(str(path))
-        exists = path.is_dir()
+        exists = _safe_is_dir(path)
         result.append(
             PathDir(
                 path=path,
@@ -148,20 +155,38 @@ def is_windows_dir(path: Path) -> bool:
         "GetWindowsDirectoryW",
         Path(os.environ.get("SystemRoot", r"C:\Windows")),
     )
-    root = _norm_path(windir)
+    sysdir = _win_dir("GetSystemDirectoryW", windir / "System32")
     p = _norm_path(path)
-    return p == root or p.startswith(root + os.sep)
+    return p in {_norm_path(windir), _norm_path(sysdir)}
 
 
-def auto_targets() -> list[PathDir]:
+def auto_targets(*, aggressive: bool = False) -> list[PathDir]:
     return [
         item
         for item in scan_path_dirs()
         if item.exists
         and item.writable
         and outside_home(item.path)
-        and not is_windows_dir(item.path)
+        and (aggressive or not is_windows_dir(item.path))
     ]
+
+
+def shadow_plan(*, aggressive: bool = False) -> tuple[PathDir, list[PathDir]] | None:
+    ranked = [item for item in auto_targets(aggressive=aggressive) if item.rank is not None]
+    if not ranked:
+        return None
+    dest = min(ranked, key=lambda item: item.rank)
+    later = [
+        item
+        for item in scan_path_dirs()
+        if item.rank is not None
+        and item.rank > dest.rank
+        and item.exists
+        and not item.writable
+        and (aggressive or not is_windows_dir(item.path))
+    ]
+    later.sort(key=lambda item: item.rank)
+    return dest, later
 
 
 def dll_search_before_path() -> list[tuple[str, str]]:

@@ -58,8 +58,8 @@ def inspect_exe(path: Path) -> ExeInfo:
     return ExeInfo(path=path, name=path.name, arch=arch)
 
 
-def should_skip(path: Path, skips: Iterable[str]) -> str | None:
-    return skip_proxy_target(path, skips)
+def should_skip(path: Path, skips: Iterable[str], out_dir: Path | None = None) -> str | None:
+    return skip_proxy_target(path, skips, out_dir)
 
 
 def process_one(
@@ -127,7 +127,7 @@ def run(
     failed: list[Result] = []
 
     for exe_path in exes:
-        reason = should_skip(exe_path, skips)
+        reason = should_skip(exe_path, skips, out_dir)
         if reason is not None:
             skipped.append(Result(exe_path.name, reason))
             continue
@@ -137,6 +137,7 @@ def run(
         except Exception as exc:
             failed.append(Result(exe_path.name, str(exc)))
             console.fail(f"{exe_path.name}  {exc}")
+            console.debug_exc()
             if not keep_going:
                 console.warn("aborting  (use --keep-going)")
                 break

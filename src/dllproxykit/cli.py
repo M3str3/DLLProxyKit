@@ -66,6 +66,18 @@ def parse_args() -> argparse.Namespace:
         help="Select writable PATH dirs outside the user profile",
     )
     parser.add_argument(
+        "--shadow",
+        action="store_true",
+        help="With --auto, proxy files from later unwritable PATH dirs into the highest-priority writable dir",
+    )
+    parser.add_argument(
+        "--aggressive",
+        "--agressive",
+        dest="aggressive",
+        action="store_true",
+        help="Do not skip Windows PATH dirs or api-ms-win-/ext-ms-win- DLLs",
+    )
+    parser.add_argument(
         "--revert",
         action="store_true",
         help="Restore .original.* instead of generating proxies",
@@ -75,7 +87,23 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Force a compiler: cl / gcc / clang / tcc / rustc, or a path to an exe",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        "--debug",
+        dest="verbose",
+        action="store_true",
+        help="Print compiler commands, full error output, and extra skip detail",
+    )
     return parser.parse_args()
+
+
+def _skip_arg(args: argparse.Namespace) -> str | None:
+    if args.skip is not None:
+        return args.skip
+    if args.aggressive:
+        return ""
+    return None
 
 
 def show_compilers(compilers) -> None:
@@ -154,7 +182,7 @@ def _payload_hint() -> None:
 
 def main() -> int:
     args = parse_args()
-    console.setup()
+    console.setup(verbose=args.verbose)
     console.banner()
 
     show_path_scan(full=args.scan_path)
@@ -181,7 +209,7 @@ def main() -> int:
             for n in range(5, 0, -1):
                 console.info(f"{n}...")
                 time.sleep(1)
-        rc = run_revert(target, kinds=kinds)
+        rc = run_revert(target, kinds=kinds, aggressive=args.aggressive)
         print()
         return rc
 
@@ -201,9 +229,21 @@ def main() -> int:
             print()
             return 1
 
+    if args.shadow and not args.auto:
+        console.fail("--shadow requires --auto")
+        print()
+        return 1
+
     if args.auto:
         ensure_fallback_payload(args.payload)
-        rc = run_auto(args.payload, args.skip, compilers, kinds=kinds)
+        rc = run_auto(
+            args.payload,
+            _skip_arg(args),
+            compilers,
+            kinds=kinds,
+            shadow=args.shadow,
+            aggressive=args.aggressive,
+        )
         _payload_hint()
         return rc
 
@@ -217,7 +257,7 @@ def main() -> int:
         input=args.input,
         output=args.output,
         payload=args.payload,
-        skip=args.skip,
+        skip=_skip_arg(args),
         keep_going=args.keep_going,
         compilers=compilers,
     )
