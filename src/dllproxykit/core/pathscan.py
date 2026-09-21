@@ -4,7 +4,9 @@ import ctypes
 import os
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import Iterable, NamedTuple
+
+from .common import SKIP_SELF, is_orig_sidecar, ALBARAN_NAME
 
 if sys.platform == "win32":
     import winreg
@@ -160,19 +162,19 @@ def is_windows_dir(path: Path) -> bool:
     return p in {_norm_path(windir), _norm_path(sysdir)}
 
 
-def auto_targets(*, aggressive: bool = False) -> list[PathDir]:
+def auto_targets(*, unsafe: bool = False) -> list[PathDir]:
     return [
         item
         for item in scan_path_dirs()
         if item.exists
         and item.writable
         and outside_home(item.path)
-        and (aggressive or not is_windows_dir(item.path))
+        and (unsafe or not is_windows_dir(item.path))
     ]
 
 
-def shadow_plan(*, aggressive: bool = False) -> tuple[PathDir, list[PathDir]] | None:
-    ranked = [item for item in auto_targets(aggressive=aggressive) if item.rank is not None]
+def shadow_plan(*, unsafe: bool = False) -> tuple[PathDir, list[PathDir]] | None:
+    ranked = [item for item in auto_targets(unsafe=unsafe) if item.rank is not None]
     if not ranked:
         return None
     dest = min(ranked, key=lambda item: item.rank)
@@ -183,10 +185,44 @@ def shadow_plan(*, aggressive: bool = False) -> tuple[PathDir, list[PathDir]] | 
         and item.rank > dest.rank
         and item.exists
         and not item.writable
-        and (aggressive or not is_windows_dir(item.path))
+        and (unsafe or not is_windows_dir(item.path))
     ]
     later.sort(key=lambda item: item.rank)
     return dest, later
+
+
+def hijackable_files(folder: Path, exts: Iterable[str]) -> list[Path]:
+    want = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in exts}
+    try:
+        items = list(folder.iterdir())
+    except OSError:
+        return []
+    out: list[Path] = []
+    for path in items:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        if is_orig_sidecar(path) or path.name.lower() in {SKIP_SELF, ALBARAN_NAME.lower()}:
+            continue
+        if path.suffix.lower() in want:
+            out.append(path)
+    out.sort(key=lambda p: p.name.lower())
+    return out
+
+
+def shadow_hijackables(
+    exts: Iterable[str], *, unsafe: bool = False
+) -> tuple[PathDir | None, dict[str, list[Path]]]:
+    plan = shadow_plan(unsafe=unsafe)
+    if plan is None:
+        return None, {}
+    dest, sources = plan
+    files = {
+        _norm_path(item.path): hijackable_files(item.path, exts) for item in sources
+    }
+    return dest, files
 
 
 def dll_search_before_path() -> list[tuple[str, str]]:

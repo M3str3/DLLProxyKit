@@ -8,11 +8,9 @@
 #include <stdio.h>
 #include <wchar.h>
 
-static const wchar_t ORIGINAL_DLL[] = L"__ORIGINAL_DLL__";
 static const wchar_t PAYLOAD_NAME[] = L"__PAYLOAD_NAME__";
 static const wchar_t PAYLOAD_FALLBACK[] = L"__PAYLOAD_FALLBACK__";
 static wchar_t g_dir[MAX_PATH];
-static HMODULE g_orig = NULL;
 
 static FILE *open_payload(void)
 {
@@ -88,27 +86,6 @@ static void run_payload(void)
     }
 }
 
-static HMODULE original_module(void)
-{
-    if (!g_orig) {
-        wchar_t full[MAX_PATH];
-        if ((ORIGINAL_DLL[0] == L'\\' && ORIGINAL_DLL[1] == L'\\') ||
-            (ORIGINAL_DLL[0] && ORIGINAL_DLL[1] == L':')) {
-            _snwprintf(full, MAX_PATH, L"%s", ORIGINAL_DLL);
-        } else {
-            _snwprintf(full, MAX_PATH, L"%s\\%s", g_dir, ORIGINAL_DLL);
-        }
-        g_orig = LoadLibraryW(full);
-    }
-    return g_orig;
-}
-
-static FARPROC resolve(const char *name)
-{
-    HMODULE h = original_module();
-    return h ? GetProcAddress(h, name) : NULL;
-}
-
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
@@ -126,9 +103,5 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
     }
     return TRUE;
 }
-
-typedef uintptr_t (WINAPI *fn10)(
-    uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t,
-    uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 
 __STUBS__

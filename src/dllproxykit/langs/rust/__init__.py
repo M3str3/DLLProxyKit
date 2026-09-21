@@ -27,6 +27,15 @@ def _stub(idx: int, name: str) -> str:
     )
 
 
+def _fake_stub(idx: int, name: str) -> str:
+    escaped = escape_c_string(name)
+    return (
+        _load("fake_stub.rs")
+        .replace("__IDX__", str(idx))
+        .replace("__EXPORT_NAME__", escaped)
+    )
+
+
 def write_dll(proj: Path, original_name: str, exports: Iterable[str]) -> tuple[Path, Path | None]:
     exports = list(exports)
     stubs = "".join(_stub(i, n) for i, n in enumerate(exports))
@@ -39,6 +48,16 @@ def write_dll(proj: Path, original_name: str, exports: Iterable[str]) -> tuple[P
         .replace("__STUBS__", stubs),
         encoding="utf-8",
     )
+    return src, None
+
+
+def write_fake(proj: Path, exports: Iterable[str]) -> tuple[Path, Path | None]:
+    exports = list(exports)
+    stubs = "".join(_fake_stub(i, n) for i, n in enumerate(exports))
+    if not stubs:
+        stubs = "// no named exports\n"
+    src = proj / "lib.rs"
+    src.write_text(_payload(_load("fake.rs")).replace("__STUBS__", stubs), encoding="utf-8")
     return src, None
 
 

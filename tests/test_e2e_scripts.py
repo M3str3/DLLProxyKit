@@ -40,6 +40,7 @@ class ScriptProxyE2E(unittest.TestCase):
 
     def _proxy(self, include: str) -> None:
         result = _kit(
+            "proxy",
             str(self.tmp),
             "--command",
             self.payload,
@@ -135,7 +136,7 @@ class ScriptProxyE2E(unittest.TestCase):
         original = b"@echo original\r\n"
         (self.tmp / "hello.bat").write_bytes(original)
         self._proxy("bat")
-        result = _kit(str(self.tmp), "--revert", "-i", "bat")
+        result = _kit("revert", str(self.tmp), "-i", "bat")
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse((self.tmp / "hello.original.bat").exists())
         self.assertEqual((self.tmp / "hello.bat").read_bytes(), original)

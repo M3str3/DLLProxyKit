@@ -4,8 +4,12 @@ from pathlib import Path
 
 from .. import ui as console
 from ..core.common import (
+    ALBARAN_NAME,
     PAYLOAD_FALLBACK,
     PAYLOAD_NAME,
+    albaran_path,
+    albaran_read,
+    albaran_write,
     is_orig_sidecar,
     live_from_orig,
     orig_sidecar,
@@ -13,7 +17,15 @@ from ..core.common import (
 from ..core.compiler import Compiler
 from .kinds import KINDS
 from .script import remove_ps1_cmd_sidecar
-from ..core.pathscan import auto_targets, is_windows_dir, scan_path_dirs, shadow_plan
+from ..core.pathscan import (
+    _norm_path,
+    auto_targets,
+    hijackable_files,
+    is_windows_dir,
+    is_writable,
+    scan_path_dirs,
+    shadow_plan,
+)
 
 
 def _iter_files(folder: Path) -> list[Path]:
@@ -100,6 +112,75 @@ def _revert_origs(origs: list[Path]) -> tuple[int, int]:
     return rc, restored
 
 
+def _want_name(name: str, kinds) -> bool:
+    ext = Path(name).suffix.lower()
+    if any(k.ext == ext for k in kinds):
+        return True
+    if ext == ".cmd" and any(k.ext == ".ps1" for k in kinds):
+        return True
+    return False
+
+
+def _related(only: str | None, name: str) -> bool:
+    if only is None:
+        return True
+    if name.lower() == only.lower():
+        return True
+    target, other = Path(only), Path(name)
+    if target.suffix.lower() == ".ps1" and other.name.lower() == f"{target.stem}.cmd".lower():
+        return True
+    return False
+
+
+def _revert_plant(folder: Path, name: str) -> str | None:
+    path = folder / name
+    if not path.exists():
+        return None
+    try:
+        path.unlink()
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+def _revert_albaran(folder: Path, kinds, only: str | None = None) -> tuple[int, int]:
+    entries = albaran_read(folder)
+    if not entries:
+        return 0, 0
+    kept: list[tuple[str, str, str]] = []
+    rc = 0
+    done = 0
+    origs = [row for row in entries if row[0] == "orig"]
+    plants = [row for row in entries if row[0] != "orig"]
+    for action, name, extra in origs + plants:
+        if not _want_name(name, kinds) or not _related(only, name):
+            kept.append((action, name, extra))
+            continue
+        if action == "orig":
+            sidecar = extra or orig_sidecar(Path(name)).name
+            err = _revert_file(folder / sidecar)
+            if err:
+                rc = 2
+                console.fail(f"{name}  {err}")
+                kept.append((action, name, extra))
+            else:
+                done += 1
+                console.ok(f"{name}  restored")
+        elif action == "plant":
+            err = _revert_plant(folder, name)
+            if err:
+                rc = 2
+                console.fail(f"{name}  {err}")
+                kept.append((action, name, extra))
+            else:
+                done += 1
+                console.ok(f"{name}  removed")
+        else:
+            kept.append((action, name, extra))
+    albaran_write(folder, kept)
+    return rc, done
+
+
 def _revert_dirs(dirs: list[Path], kinds=KINDS) -> int:
     if not dirs:
         console.warn("nothing to revert")
@@ -109,15 +190,22 @@ def _revert_dirs(dirs: list[Path], kinds=KINDS) -> int:
     restored = 0
     for folder in dirs:
         console.section(str(folder))
-        origs: list[Path] = []
-        for kind in kinds:
-            origs.extend(_origs(folder, kind.ext))
-        if not origs:
-            console.info("nothing to revert")
-            continue
-        d_rc, d_ok = _revert_origs(origs)
-        rc = rc or d_rc
-        restored += d_ok
+        if albaran_path(folder).is_file():
+            d_rc, d_ok = _revert_albaran(folder, kinds)
+            rc = rc or d_rc
+            restored += d_ok
+            if d_ok == 0:
+                console.info("nothing to revert")
+        else:
+            origs: list[Path] = []
+            for kind in kinds:
+                origs.extend(_origs(folder, kind.ext))
+            if not origs:
+                console.info("nothing to revert")
+                continue
+            d_rc, d_ok = _revert_origs(origs)
+            rc = rc or d_rc
+            restored += d_ok
         err = _maybe_remove_payload(folder)
         if err:
             rc = 2
@@ -165,15 +253,16 @@ def _run_auto_shadow(
     skip: str | None,
     compilers: list[Compiler] | None,
     kinds,
-    aggressive: bool,
+    unsafe: bool,
 ) -> int:
-    plan = shadow_plan(aggressive=aggressive)
+    plan = shadow_plan(unsafe=unsafe)
     if plan is None:
         console.warn("no ranked writable PATH dir outside the user profile")
         return 0
     dest, sources = plan
+    n = sum(len(hijackable_files(item.path, [k.ext for k in kinds])) for item in sources)
     console.section(str(dest.path))
-    console.info(f"#{dest.rank}  shadow dest")
+    console.info(f"#{dest.rank}  shadow dest  {n} hijackable")
     if console.is_verbose():
         for item in scan_path_dirs():
             if item.rank is None or dest.rank is None or item.rank <= dest.rank:
@@ -182,7 +271,7 @@ def _run_auto_shadow(
                 why = "missing"
             elif item.writable:
                 why = "writable"
-            elif not aggressive and is_windows_dir(item.path):
+            elif not unsafe and is_windows_dir(item.path):
                 why = "windows"
             else:
                 continue
@@ -203,12 +292,12 @@ def run_auto(
     compilers: list[Compiler] | None = None,
     kinds=KINDS,
     shadow: bool = False,
-    aggressive: bool = False,
+    unsafe: bool = False,
 ) -> int:
     if shadow:
-        return _run_auto_shadow(payload, skip, compilers, kinds, aggressive)
+        return _run_auto_shadow(payload, skip, compilers, kinds, unsafe)
 
-    targets = auto_targets(aggressive=aggressive)
+    targets = auto_targets(unsafe=unsafe)
     if not targets:
         console.warn("no writable PATH dirs outside the user profile")
         return 0
@@ -237,6 +326,26 @@ def run_auto(
     return rc
 
 
+def writable_albaran_dirs() -> list[Path]:
+    seen: set[str] = set()
+    out: list[Path] = []
+    folders = [item.path for item in scan_path_dirs() if item.exists and item.writable]
+    try:
+        cwd = Path.cwd()
+        if is_writable(cwd):
+            folders.append(cwd)
+    except OSError:
+        pass
+    for folder in folders:
+        key = _norm_path(folder)
+        if key in seen:
+            continue
+        seen.add(key)
+        if albaran_path(folder).is_file():
+            out.append(folder)
+    return out
+
+
 def _orig_for_file(path: Path) -> Path | None:
     if is_orig_sidecar(path):
         return path if path.is_file() else None
@@ -246,12 +355,13 @@ def _orig_for_file(path: Path) -> Path | None:
     return None
 
 
-def run_revert(target: str | Path | None = None, kinds=KINDS, aggressive: bool = False) -> int:
+def run_revert(target: str | Path | None = None, kinds=KINDS, unsafe: bool = False) -> int:
     if target is None:
-        dirs = [item.path for item in auto_targets(aggressive=aggressive)]
+        del unsafe
+        dirs = writable_albaran_dirs()
         rc = 0
         if not dirs:
-            console.warn("no writable PATH dirs outside the user profile")
+            console.warn(f"no {ALBARAN_NAME} in writable PATH dirs")
         else:
             rc = _revert_dirs(dirs, kinds)
         err = _remove_fallback_payload()
@@ -262,13 +372,17 @@ def run_revert(target: str | Path | None = None, kinds=KINDS, aggressive: bool =
 
     path = Path(target)
     if path.is_file():
-        orig = _orig_for_file(path)
-        if orig is None:
-            console.fail(f"no .original sidecar  {path}")
-            return 1
-        console.section(str(path.parent))
-        rc, restored = _revert_origs([orig])
-        err = _maybe_remove_payload(path.parent)
+        folder = path.parent
+        console.section(str(folder))
+        if albaran_path(folder).is_file():
+            rc, restored = _revert_albaran(folder, kinds, only=path.name)
+        else:
+            orig = _orig_for_file(path)
+            if orig is None:
+                console.fail(f"no albaran / .original sidecar  {path}")
+                return 1
+            rc, restored = _revert_origs([orig])
+        err = _maybe_remove_payload(folder)
         if err:
             rc = 2
             console.fail(f"{PAYLOAD_NAME}  {err}")

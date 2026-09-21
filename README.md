@@ -32,20 +32,22 @@ build.cmd
 Spray writable PATH dirs (outside the user profile):
 
 ```cmd
-dist\DLLProxyKit.exe --auto
+dist\DLLProxyKit.exe auto
 ```
 
-Undo that:
+Undo that (every writable folder with a `dllproxykit.changelog`; 5s countdown). One folder: `revert C:\that\dir`.
 
 ```cmd
-dist\DLLProxyKit.exe --auto --revert
+dist\DLLProxyKit.exe revert
 ```
 
 Or point it at one folder / file:
 
 ```cmd
-python -m dllproxykit tests\dlls-test --keep-going
+python -m dllproxykit proxy tests\dlls-test --keep-going
 ```
+
+`paths` lists PATH and hijackables. `hunt` lists PATH/DLL hijack angles (services and tasks whose command would resolve via search to a writable dest). `fake osppc.dll` plants a DLL with no original into that dest (DllMain payload only). `auto --shadow` plants later PATH names into the first writable dest.
 
 ```text
 vfcompat.dll              ← proxy

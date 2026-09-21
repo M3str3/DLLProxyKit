@@ -17,7 +17,7 @@ except ImportError:
     sys.exit(1)
 
 from .. import ui as console
-from ..core.common import DEFAULT_PAYLOAD, Result, orig_sidecar, print_summary, resolve_io, skip_proxy_target
+from ..core.common import DEFAULT_PAYLOAD, Result, forward_target, note_proxy, orig_sidecar, print_summary, resolve_io, skip_proxy_target
 from ..core.compiler import (
     MACHINE_TO_ARCH,
     Compiler,
@@ -75,6 +75,7 @@ def process_one(
     compiler = require_compiler(compilers, info.arch)
     proxy_name = dest_name or info.name
     original_name = orig_sidecar(Path(proxy_name)).name
+    launch = forward_target(exe_path, out_dir, proxy_name)
 
     proj = workroot / Path(proxy_name).stem
     if proj.exists():
@@ -82,13 +83,16 @@ def process_one(
     proj.mkdir(parents=True)
 
     lang = for_compiler(compiler)
-    src = lang.write_exe(proj, original_name)
+    src = lang.write_exe(proj, launch)
     built = proj / "proxy.exe"
     compile_exe(compiler, src, built)
 
-    (out_dir / original_name).write_bytes(exe_path.read_bytes())
+    note_proxy(exe_path, out_dir, proxy_name)
     shutil.copy2(built, out_dir / proxy_name)
-    console.ok(f"{proxy_name}  +  {original_name}  {console.dim(compiler.kind)}")
+    if (out_dir / original_name).is_file():
+        console.ok(f"{proxy_name}  +  {original_name}  {console.dim(compiler.kind)}")
+    else:
+        console.ok(f"{proxy_name}  {console.dim(compiler.kind)}")
     return info
 
 

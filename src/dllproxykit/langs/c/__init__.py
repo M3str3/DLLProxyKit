@@ -26,6 +26,14 @@ def _stub(idx: int, name: str) -> str:
     )
 
 
+def _fake_stub(idx: int, name: str) -> str:
+    return (
+        _load("fake_stub.c")
+        .replace("__IDX__", str(idx))
+        .replace("__EXPORT_NAME__", escape_c_string(name))
+    )
+
+
 def _def_export_name(name: str) -> str:
     if name.isidentifier():
         return name
@@ -49,6 +57,24 @@ def write_dll(proj: Path, original_name: str, exports: Iterable[str]) -> tuple[P
         .replace("__STUBS__", stubs),
         encoding="utf-8",
     )
+    def_path = None
+    if exports:
+        lines = ["LIBRARY proxy", "EXPORTS"]
+        for idx, name in enumerate(exports):
+            lines.append(f"    {_def_export_name(name)}=stub_{idx}")
+        def_path = proj / "proxy.def"
+        def_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return src, def_path
+
+
+def write_fake(proj: Path, exports: Iterable[str]) -> tuple[Path, Path | None]:
+    exports = list(exports)
+    stubs = "".join(_fake_stub(i, n) for i, n in enumerate(exports))
+    if not stubs:
+        stubs = "/* no named exports */\n"
+    _write_compat(proj)
+    src = proj / "proxy.c"
+    src.write_text(_payload(_load("fake.c")).replace("__STUBS__", stubs), encoding="utf-8")
     def_path = None
     if exports:
         lines = ["LIBRARY proxy", "EXPORTS"]

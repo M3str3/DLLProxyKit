@@ -26,6 +26,8 @@ from ..core.common import (
     orig_sidecar,
     resolve_io,
     skip_proxy_target,
+    forward_target,
+    note_proxy,
 )
 from ..core.compiler import (
     MACHINE_TO_ARCH,
@@ -103,6 +105,7 @@ def process_one(
 
     proxy_name = dest_name or info.name
     original_name = orig_sidecar(Path(proxy_name)).name
+    launch = forward_target(dll_path, out_dir, proxy_name)
 
     proj = workroot / Path(proxy_name).stem
     if proj.exists():
@@ -110,13 +113,16 @@ def process_one(
     proj.mkdir(parents=True)
 
     lang = for_compiler(compiler)
-    src, def_path = lang.write_dll(proj, original_name, exports)
+    src, def_path = lang.write_dll(proj, launch, exports)
     built = proj / "proxy.dll"
     compile_dll(compiler, src, built, def_path)
 
-    (out_dir / original_name).write_bytes(dll_path.read_bytes())
+    note_proxy(dll_path, out_dir, proxy_name)
     shutil.copy2(built, out_dir / proxy_name)
-    console.ok(f"{proxy_name}  +  {original_name}  {console.dim(compiler.kind)}")
+    if (out_dir / original_name).is_file():
+        console.ok(f"{proxy_name}  +  {original_name}  {console.dim(compiler.kind)}")
+    else:
+        console.ok(f"{proxy_name}  {console.dim(compiler.kind)}")
     return info
 
 

